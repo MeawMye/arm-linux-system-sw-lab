@@ -7,6 +7,9 @@
 #include <linux/minmax.h>
 #include <linux/errno.h>
 
+#include <linux/mutex.h>
+
+
 #define MYDEVICE_BUF_SIZE       256
 
 static char mydevice_buf[MYDEVICE_BUF_SIZE];
@@ -14,9 +17,7 @@ static size_t head;   // next write position
 static size_t tail;   // next read position
 static size_t used;   // used in buffer
 
-
-
-
+static DEFINE_MUTEX(mydevice_mutex);
 
 static ssize_t mydevice_read(struct file *file, char __user *buf,
 			       size_t count, loff_t *ppos)
@@ -26,7 +27,12 @@ static ssize_t mydevice_read(struct file *file, char __user *buf,
 	
 	if(count == 0) return 0;
 	
-	if(used == 0) return -EAGAIN;
+mutex_lock(&mydevice_mutex);
+	
+	if(used == 0) {
+	mutex_unlock(&mydevice_mutex);
+	return -EAGAIN;
+	}
 	
 	count = min_t(size_t, count, used);
 	first = min_t(size_t, count, MYDEVICE_BUF_SIZE - tail);
@@ -35,7 +41,10 @@ static ssize_t mydevice_read(struct file *file, char __user *buf,
 	ret = copy_to_user(buf, mydevice_buf + tail, first);
 	copied = first - ret;
 	
-	if(copied == 0) return -EFAULT;
+	if(copied == 0) {
+	mutex_unlock(&mydevice_mutex);
+	return -EFAULT;
+	}
 	
 	if(copied != first) goto out;
 	
@@ -47,6 +56,8 @@ static ssize_t mydevice_read(struct file *file, char __user *buf,
 out:
 	tail = (tail + copied) % MYDEVICE_BUF_SIZE;
 	used -= copied;
+	
+mutex_unlock(&mydevice_mutex);
 
 	return copied ? copied : -EFAULT;
 }
@@ -58,8 +69,13 @@ static ssize_t mydevice_write(struct file *file, const char __user *buf,
 	ssize_t first, second, copied;
 	
 	if(count == 0) return 0;
+	
+mutex_lock(&mydevice_mutex);
 
-	if (used >= MYDEVICE_BUF_SIZE) return -EAGAIN;
+	if (used >= MYDEVICE_BUF_SIZE) {
+	mutex_unlock(&mydevice_mutex);
+	return -EAGAIN;
+	}
 
 	count = min_t(size_t, count, MYDEVICE_BUF_SIZE - used);
 	first = min_t(size_t, count, MYDEVICE_BUF_SIZE - head);
@@ -68,7 +84,10 @@ static ssize_t mydevice_write(struct file *file, const char __user *buf,
 	ret = copy_from_user(mydevice_buf + head, buf, first);
 	copied = first - ret;
 	
-	if(copied == 0) return -EFAULT;
+	if(copied == 0) {
+	mutex_unlock(&mydevice_mutex);
+	return -EFAULT;
+	}
 	
 	if(copied != first) goto out;
 	
@@ -80,7 +99,9 @@ static ssize_t mydevice_write(struct file *file, const char __user *buf,
 out:
 	head = (head + copied) % MYDEVICE_BUF_SIZE;
 	used += copied;
-	  
+	
+mutex_unlock(&mydevice_mutex);
+
 	return copied ? copied : -EFAULT;
 }
 
