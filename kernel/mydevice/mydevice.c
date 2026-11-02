@@ -9,6 +9,12 @@
 
 #include <linux/mutex.h>
 
+#include <linux/platform_device.h>
+#include <linux/of.h>
+#include <linux/gpio/consumer.h>
+
+#include <linux/slab.h>
+
 
 #define MYDEVICE_BUF_SIZE       256
 
@@ -106,7 +112,7 @@ mutex_unlock(&mydevice_mutex);
 }
 
 static const struct file_operations mydevice_misc_fops = {
-	//.owner		= THIS_MODULE,
+	.owner		= THIS_MODULE,
 	.read           = mydevice_read,
 	.write          = mydevice_write,
 
@@ -118,23 +124,85 @@ static struct miscdevice mydevice_misc = {
 	&mydevice_misc_fops,
 };
 
+static const struct of_device_id mydevice_of_match[] = {
+  { .compatible = "demo,mydevice" },
+  { }
+};
+
+struct mydevice_data {
+  struct gpio_desc *control_gpio;
+  };
+  
+  
+static int mydevice_probe(struct platform_device *pdev)
+{
+  struct mydevice_data *data;
+  int ret;
+  
+  data = kzalloc(sizeof(*data), GFP_KERNEL);
+  if (!data) {
+	  return -ENOMEM;
+	}
+
+  data->control_gpio = gpiod_get(&pdev->dev, "control", GPIOD_OUT_LOW);
+  if (IS_ERR(data->control_gpio)) {
+    int err = PTR_ERR(data->control_gpio);
+    dev_err(&pdev->dev, "Failed to get control GPIO: %d\n", err);
+    kfree(data);
+    return err;
+    }
+    
+  platform_set_drvdata(pdev, data);
+  
+  ret = misc_register(&mydevice_misc);
+    	if (ret) {
+		pr_err("mydevice: failed\n");
+		gpiod_put(data->control_gpio);
+		kfree(data);
+		return ret;
+	}
+  pr_info("mydevice: successfully\n");
+  return 0;
+}
+
+static void mydevice_remove(struct platform_device *pdev)
+{
+  struct mydevice_data *data = platform_get_drvdata(pdev);
+  
+  misc_deregister(&mydevice_misc);
+  gpiod_put(data->control_gpio);
+  kfree(data);
+  
+  pr_info("mydevice: unregistered successfully\n");  
+}
+
+static struct platform_driver mydevice_driver = {
+    .probe = mydevice_probe,
+    .remove = mydevice_remove,
+    .driver = {
+        .name = "mydevice",
+        .of_match_table = mydevice_of_match,
+    }
+};
+
+
 static int __init mydevice_module_init(void)
 {
 	int ret;
 
-	ret = misc_register(&mydevice_misc);
+	ret = platform_driver_register(&mydevice_driver);
 	if (ret) {
-		pr_err("mydevice: misc_register failed\n");
+		pr_err("mydevice: platform_driver failed\n");
 		return ret;
 	}
 
-	pr_info("mydevice: registered successfully\n");
+	pr_info("mydevice: platform_driver successfully\n");
 	return 0;
 }
 
 static void __exit mydevice_module_exit(void)
 {
-	misc_deregister(&mydevice_misc);
+	platform_driver_unregister(&mydevice_driver);
 	pr_info("mydevice: unregistered successfully\n");
 }
 
