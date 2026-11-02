@@ -138,6 +138,8 @@ static int mydevice_probe(struct platform_device *pdev)
 {
   struct mydevice_data *data;
   int ret;
+  int value;
+  
   
   data = kzalloc(sizeof(*data), GFP_KERNEL);
   if (!data) {
@@ -153,6 +155,15 @@ static int mydevice_probe(struct platform_device *pdev)
     }
     
   platform_set_drvdata(pdev, data);
+  
+  gpiod_set_value(data->control_gpio, 1);
+  
+  value = gpiod_get_value(data->control_gpio);
+  if(value < 0)
+      dev_err(&pdev->dev, "GPIO read failed: %d\n", value);
+  else
+      pr_info("GPIO 0 is [%d].\n", value);
+  
   
   ret = misc_register(&mydevice_misc);
     	if (ret) {
