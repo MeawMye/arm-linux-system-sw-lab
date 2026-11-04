@@ -4,7 +4,7 @@
 
 #include <fcntl.h>
 
-#define TIMEOUT 5
+#define TIMEOUT 30
 
 int main()
 {

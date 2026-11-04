@@ -254,8 +254,15 @@ Topics explored include:
 - GPIO descriptor-based resource management
 - QEMU-based embedded Linux development and debugging
 
+## Poll / Wait Queue Validation
+
+- Verified that poll() times out when the ring buffer is empty.
+- Verified that poll() waked up when another process writes data to /dev/mydevice. 
+- Confirmed POLLIN readiness before the 30-second timeout.
+
 ---
 
 **Project status:** Ongoing development.
 
 This repository is an educational implementation for exploring ARM64 Linux system software and kernel-driver integration.
+
