@@ -25,6 +25,12 @@ static size_t used;   // used in buffer
 
 static DEFINE_MUTEX(mydevice_mutex);
 
+struct mydevice_data {
+  struct gpio_desc *control_gpio;
+  struct miscdevice misdev;
+  };
+  
+  
 static ssize_t mydevice_read(struct file *file, char __user *buf,
 			       size_t count, loff_t *ppos)
 {
@@ -73,8 +79,31 @@ static ssize_t mydevice_write(struct file *file, const char __user *buf,
 {
 	ssize_t ret;
 	ssize_t first, second, copied;
+	char cmd[6];
 	
 	if(count == 0) return 0;
+	
+	if(count == 6) {
+	    struct miscdevice *misc = file->private_data;
+	    struct mydevice_data *data = container_of(misc, struct mydevice_data, misdev);
+
+	    if(copy_from_user(cmd, buf, 6))
+		      return -EFAULT;
+
+	    if(memcmp(cmd, "GPIO 1", 6) == 0) {
+		  gpiod_set_value(data->control_gpio, 1);
+		  
+		  pr_info("GPIO 0 value: %d\n", gpiod_get_value(data->control_gpio));
+		      return count;
+		}
+
+    	    if (memcmp(cmd, "GPIO 0", 6) == 0) {
+        	  gpiod_set_value(data->control_gpio, 0);
+        	  pr_info("GPIO 0 value: %d\n", gpiod_get_value(data->control_gpio));
+        	      return count;
+    		}
+      }
+
 	
 mutex_lock(&mydevice_mutex);
 
@@ -118,20 +147,11 @@ static const struct file_operations mydevice_misc_fops = {
 
 };
 
-static struct miscdevice mydevice_misc = {
-	MISC_DYNAMIC_MINOR,
-	"mydevice",
-	&mydevice_misc_fops,
-};
 
 static const struct of_device_id mydevice_of_match[] = {
   { .compatible = "demo,mydevice" },
   { }
 };
-
-struct mydevice_data {
-  struct gpio_desc *control_gpio;
-  };
   
   
 static int mydevice_probe(struct platform_device *pdev)
@@ -164,8 +184,11 @@ static int mydevice_probe(struct platform_device *pdev)
   else
       pr_info("GPIO 0 is [%d].\n", value);
   
+  data->misdev.minor  = MISC_DYNAMIC_MINOR;
+  data->misdev.name   = "mydevice";
+  data->misdev.fops   = &mydevice_misc_fops;
   
-  ret = misc_register(&mydevice_misc);
+  ret = misc_register(&data->misdev);
     	if (ret) {
 		pr_err("mydevice: failed\n");
 		gpiod_put(data->control_gpio);
@@ -180,7 +203,7 @@ static void mydevice_remove(struct platform_device *pdev)
 {
   struct mydevice_data *data = platform_get_drvdata(pdev);
   
-  misc_deregister(&mydevice_misc);
+  misc_deregister(&data->misdev);
   gpiod_put(data->control_gpio);
   kfree(data);
   
