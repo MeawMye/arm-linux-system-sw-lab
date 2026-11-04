@@ -35,9 +35,22 @@ int main()
         return 0;
     }
 
-    if (fds[0].revents & POLLIN)
+    if (fds[0].revents & POLLIN){
         printf("mydevice is readable\n");
+        char buffer[256];
+        ssize_t counted = read(fd, buffer, sizeof(buffer)-1);
         
+        if(counted < 0) {
+            perror("read");
+            close(fd);
+            return 1;
+        }
+        
+        if(counted > 0) {
+          buffer[counted] = '\0';
+          printf("%s\n",buffer);
+        }  
+    }    
     close(fd);
 
     return 0;
