@@ -15,6 +15,8 @@
 
 #include <linux/slab.h>
 
+#include <linux/poll.h>
+
 
 #define MYDEVICE_BUF_SIZE       256
 
@@ -25,10 +27,33 @@ static size_t used;   // used in buffer
 
 static DEFINE_MUTEX(mydevice_mutex);
 
+static DECLARE_WAIT_QUEUE_HEAD(mydevice_waitq);
+
 struct mydevice_data {
   struct gpio_desc *control_gpio;
   struct miscdevice misdev;
   };
+  
+static __poll_t mydevice_poll(struct file *file, poll_table *wait)
+{
+ //       struct miscdevice *misc = file->private_data;
+ //       struct mydevice_data *data = container_of(misc, struct mydevice_data, misdev);
+        __poll_t mask = 0;
+        
+        poll_wait(file, &mydevice_waitq, wait);
+        
+mutex_lock(&mydevice_mutex);
+
+        if(used > 0)
+            mask |= EPOLLIN;
+        
+        if(used < MYDEVICE_BUF_SIZE)
+            mask |= EPOLLOUT;
+            
+mutex_unlock(&mydevice_mutex);
+            
+        return mask;
+}
   
   
 static ssize_t mydevice_read(struct file *file, char __user *buf,
@@ -70,6 +95,9 @@ out:
 	used -= copied;
 	
 mutex_unlock(&mydevice_mutex);
+
+        if(copied > 0)
+            wake_up_interruptible(&mydevice_waitq);
 
 	return copied ? copied : -EFAULT;
 }
@@ -137,6 +165,9 @@ out:
 	
 mutex_unlock(&mydevice_mutex);
 
+        if(copied > 0)
+          wake_up_interruptible(&mydevice_waitq);
+
 	return copied ? copied : -EFAULT;
 }
 
@@ -144,6 +175,7 @@ static const struct file_operations mydevice_misc_fops = {
 	.owner		= THIS_MODULE,
 	.read           = mydevice_read,
 	.write          = mydevice_write,
+	.poll           = mydevice_poll,
 
 };
 
