@@ -11,7 +11,7 @@ int main()
     struct pollfd fds[1];
     int ret;
     
-    int fd = open("/dev/mydevice", O_RDONLY);
+    int fd = open("/dev/mydevice", O_WRONLY);
     if(fd < 0) {
         perror("open");
         return 1;
@@ -19,7 +19,7 @@ int main()
     
 
     fds[0].fd = fd;
-    fds[0].events = POLLIN;
+    fds[0].events = POLLOUT;
 
     ret = poll(fds, 1, TIMEOUT * 1000);
 
@@ -35,22 +35,9 @@ int main()
         return 0;
     }
 
-    if (fds[0].revents & POLLIN){
-        printf("mydevice is readable\n");
-        char buffer[256];
-        ssize_t counted = read(fd, buffer, sizeof(buffer)-1);
-        
-        if(counted < 0) {
-            perror("read");
-            close(fd);
-            return 1;
-        }
-        
-        if(counted > 0) {
-          buffer[counted] = '\0';
-          printf("%s\n",buffer);
-        }  
-    }    
+    if (fds[0].revents & POLLOUT){
+        printf("mydevice is writable\n");
+        }    
     close(fd);
 
     return 0;

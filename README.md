@@ -254,11 +254,17 @@ Topics explored include:
 - GPIO descriptor-based resource management
 - QEMU-based embedded Linux development and debugging
 
-## Poll / Wait Queue Validation
+## PollIN / Wait Queue Validation
 
 - Verified that poll() times out when the ring buffer is empty.
 - Verified that poll() waked up when another process writes data to /dev/mydevice. 
 - Confirmed POLLIN readiness before the 30-second timeout.
+
+## POLLOUT Validation
+
+- Verified that POLLOUT times out after 30 seconds when the 256-bytes ring buffer is full.
+- Verified that reading 1 byte frees buffer space and wakes the waiting poll() process.
+- Confirmed that POLLOUT readiness is reported after buffer space becomes available.
 
 ---
 
