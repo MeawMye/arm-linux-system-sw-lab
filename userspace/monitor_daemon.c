@@ -2,6 +2,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #define BUF_SIZE 256
 #define QUEUE_SIZE 16
@@ -49,7 +50,7 @@ int read_cpu_stat(struct cpu_stat *stat)
   FILE *fp = fopen("/proc/stat", "r");
   if(fp == NULL) {
     printf("file open failed\n");
-    return 0;
+    return -1;
   }
 
   if(fgets(buf, sizeof(buf), fp) == NULL) {
@@ -59,7 +60,7 @@ int read_cpu_stat(struct cpu_stat *stat)
       printf("fgets() failed to read\n");
     }
     fclose(fp);
-    return 0;
+    return -1;
   }
 
   unsigned long long user, nice, system, idle, iowait, irq, softirq, steal;
@@ -71,7 +72,7 @@ int read_cpu_stat(struct cpu_stat *stat)
   if (parsed_count != 8) {
     printf("CPU stat parsing failed\n");
     fclose(fp);
-    return 0;
+    return -1;
   }
 
   stat->total = user + nice + system + idle
@@ -147,6 +148,7 @@ int main()
   pthread_t thread_id_C;
 
   struct cpu_stat curr;
+  struct cpu_stat prev;
 
   queue.head = 0;
   queue.tail = 0;
@@ -182,12 +184,25 @@ int main()
 
   printf("used: %zu, head: %zu, cpu_data: %f\n", queue.used, queue.head, queue.q[0].data.proc.cpu_data);
 
-  int result = read_cpu_stat(&curr);
+  int prev_result = read_cpu_stat(&prev);
+  sleep(1);
+  int curr_result = read_cpu_stat(&curr);
 
-  if(result == 0) {
+  unsigned long long delta_total = curr.total - prev.total;
+  unsigned long long delta_idle  = curr.idle - prev.idle;
+
+  if(prev_result == 0 && curr_result== 0) {
+     printf("total=%llu, idle=%llu\n", prev.total, prev.idle);
      printf("total=%llu, idle=%llu\n", curr.total, curr.idle);
   } else {
      printf("CPU stat read failed\n");
+  }
+
+  if(delta_total == 0) {
+    printf("Invalid CPU time delta\n");
+  } else {
+      float cpu_usage = (float)(delta_total - delta_idle) / delta_total * 100.0f;
+      printf("CPU usage: %.2f%%\n", cpu_usage);
   }
 
   pthread_mutex_destroy(&queue.mutex);
