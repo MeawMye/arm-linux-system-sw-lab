@@ -84,6 +84,58 @@ int read_cpu_stat(struct cpu_stat *stat)
   return 0;
 }
 
+int read_mem_usage(float *usage)
+{
+
+  if(usage == NULL) {
+      printf("usage is NULL\n");
+      return -1;
+  }
+  char buf[256];
+  int found_total = 0;
+  int found_available = 0;
+
+  FILE *fp = fopen("/proc/meminfo", "r");
+  if(fp == NULL) {
+    printf("file open failed\n");
+    return -1;
+  }
+
+  unsigned long long mem_total = 0;
+  unsigned long long mem_available = 0;
+
+  while(fgets(buf, sizeof(buf), fp) != NULL) {
+
+	int parsed_count = sscanf(buf, "MemTotal: %llu", &mem_total);
+
+	if(parsed_count == 1) {
+		printf("MemTotal: %llu\n", mem_total);
+		found_total = 1;
+	}
+
+	parsed_count = sscanf(buf, "MemAvailable: %llu", &mem_available);
+
+	if(parsed_count == 1) {
+		printf("MemAvailable: %llu\n", mem_available);
+		found_available = 1;
+	}
+}
+
+  if(ferror(fp)) {
+	  printf("File read failed\n");
+	  fclose(fp);
+	  return -1;
+   }
+
+  fclose(fp);
+
+  if(!found_total || !found_available || mem_total == 0 || mem_available > mem_total) return -1;
+
+  *usage = (float)(mem_total - mem_available) / mem_total * 100.0f;
+
+  return 0;
+}
+
 int calculate_cpu_usage(
     const struct cpu_stat *prev,
     const struct cpu_stat *curr,
@@ -124,6 +176,7 @@ void *producer(void *arg)
   struct cpu_stat curr;
   struct cpu_stat prev;
   float cpu_percent;
+  float mem_percent;
 
   int prev_result = read_cpu_stat(&prev);
 
@@ -153,6 +206,15 @@ void *producer(void *arg)
       return NULL;
   }
 
+  int mem_result = read_mem_usage(&mem_percent);
+
+  if(mem_result != 0) {
+      printf("Memory usage calculation failed\n");
+      return NULL;
+  }
+
+  printf("Memory usage: %.2f%%\n", mem_percent);
+
 pthread_mutex_lock(&queue->mutex);
 
   while(queue->used >= QUEUE_SIZE)
@@ -164,6 +226,7 @@ pthread_mutex_lock(&queue->mutex);
 
   queue->q[queue->head].type_identifier = 0;
   queue->q[queue->head].data.proc.cpu_data = cpu_percent;
+  queue->q[queue->head].data.proc.mem_data = mem_percent;
   queue->head = (queue->head + 1) % QUEUE_SIZE;
   queue->used += 1;
 
@@ -194,8 +257,6 @@ pthread_mutex_lock(&queue->mutex);
     printf("Consumer awakened\n");
   }
 
-
-
   struct monitor_data data = queue->q[queue->tail];
   queue->tail = (queue->tail + 1) % QUEUE_SIZE;
   queue->used -= 1;
@@ -204,7 +265,8 @@ pthread_mutex_lock(&queue->mutex);
 
 pthread_mutex_unlock(&queue->mutex);
 
-  printf("value: %f\n", data.data.proc.cpu_data);
+  printf("CPU: %.2f%%\n", data.data.proc.cpu_data);
+  printf("Memory: %.2f%%\n", data.data.proc.mem_data);
 
 }  return NULL;
 
