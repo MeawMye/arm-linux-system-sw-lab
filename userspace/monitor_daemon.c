@@ -43,6 +43,7 @@ struct monitor_queue {
 	size_t used;
 };
 
+
 int read_cpu_stat(struct cpu_stat *stat)
 {
   char buf[256];
@@ -83,12 +84,67 @@ int read_cpu_stat(struct cpu_stat *stat)
   return 0;
 }
 
+int calculate_cpu_usage(
+    const struct cpu_stat *prev,
+    const struct cpu_stat *curr,
+    float *usage) {
+
+  if(prev == NULL || curr == NULL) {
+    printf("pointer is NULL\n");
+    return -1; }
+
+  if(usage == NULL) {
+    printf("usage is NULL\n");
+    return -1; }
+
+  if(curr->total < prev->total || curr->idle < prev->idle) return -1;
+
+  unsigned long long delta_total = curr->total - prev->total;
+  unsigned long long delta_idle  = curr->idle - prev->idle;
+
+  if(delta_idle > delta_total) return -1;
+
+  if(delta_total == 0) {
+    printf("Invalid CPU time delta\n");
+    return -1;
+  } else {
+      float cpu_usage = (float)(delta_total - delta_idle) / delta_total * 100.0f;
+      *usage = cpu_usage;
+  }
+
+  return 0;
+    }
 
 
 void *producer(void *arg)
 {
   printf("Producer thread started\n");
   struct monitor_queue *queue = arg;
+
+  struct cpu_stat curr;
+  struct cpu_stat prev;
+  float cpu_percent;
+
+  int prev_result = read_cpu_stat(&prev);
+  sleep(1);
+  int curr_result = read_cpu_stat(&curr);
+
+  if(prev_result == 0 && curr_result == 0) {
+
+    int calc_result = calculate_cpu_usage(&prev, &curr, &cpu_percent);
+
+    if (calc_result == 0) {
+      printf("CPU usage: %.2f%%\n", cpu_percent);
+    } else {
+      printf("CPU usage calculation failed\n");
+      return NULL;
+    }
+  } else {
+      printf("CPU stat read failed\n");
+      return NULL;
+  }
+
+
 
 pthread_mutex_lock(&queue->mutex);
 
@@ -100,7 +156,7 @@ pthread_mutex_lock(&queue->mutex);
   }
 
   queue->q[queue->head].type_identifier = 0;
-  queue->q[queue->head].data.proc.cpu_data = 35.7f;
+  queue->q[queue->head].data.proc.cpu_data = cpu_percent;
   queue->head = (queue->head + 1) % QUEUE_SIZE;
   queue->used += 1;
 
@@ -141,14 +197,13 @@ pthread_mutex_unlock(&queue->mutex);
 
 }
 
+
+
 int main()
 {
   struct monitor_queue queue;
   pthread_t thread_id_P;
   pthread_t thread_id_C;
-
-  struct cpu_stat curr;
-  struct cpu_stat prev;
 
   queue.head = 0;
   queue.tail = 0;
@@ -157,15 +212,6 @@ int main()
   pthread_mutex_init(&queue.mutex, NULL);
   pthread_cond_init(&queue.not_empty, NULL);
   pthread_cond_init(&queue.not_full, NULL);
-
-  // test
-  for(int i=0; i<QUEUE_SIZE; i++)
-  {
-    queue.q[i].type_identifier = 0;
-    queue.q[i].data.proc.cpu_data = 35.7f;
-
-    queue.used += 1;
-  }
 
 
   if(pthread_create(&thread_id_P, NULL, producer, &queue) != 0) {
@@ -178,32 +224,12 @@ int main()
     return 1;
   }
 
-
   pthread_join(thread_id_P, NULL);
   pthread_join(thread_id_C, NULL);
 
   printf("used: %zu, head: %zu, cpu_data: %f\n", queue.used, queue.head, queue.q[0].data.proc.cpu_data);
 
-  int prev_result = read_cpu_stat(&prev);
-  sleep(1);
-  int curr_result = read_cpu_stat(&curr);
 
-  unsigned long long delta_total = curr.total - prev.total;
-  unsigned long long delta_idle  = curr.idle - prev.idle;
-
-  if(prev_result == 0 && curr_result== 0) {
-     printf("total=%llu, idle=%llu\n", prev.total, prev.idle);
-     printf("total=%llu, idle=%llu\n", curr.total, curr.idle);
-  } else {
-     printf("CPU stat read failed\n");
-  }
-
-  if(delta_total == 0) {
-    printf("Invalid CPU time delta\n");
-  } else {
-      float cpu_usage = (float)(delta_total - delta_idle) / delta_total * 100.0f;
-      printf("CPU usage: %.2f%%\n", cpu_usage);
-  }
 
   pthread_mutex_destroy(&queue.mutex);
   pthread_cond_destroy(&queue.not_empty);
