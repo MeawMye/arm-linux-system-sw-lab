@@ -8,3 +8,9 @@ modules.order
 .tmp_versions/
 .cache.mk
 
+# Userspace build artifacts
+/userspace/monitor_daemon
+/userspace/monitor_daemon_arm64
+
+# Local backup files
+*.bak

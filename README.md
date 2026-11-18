@@ -267,8 +267,108 @@ Topics explored include:
 - Confirmed that POLLOUT readiness is reported after buffer space becomes available.
 
 ---
+## P4. Userspace Monitoring Daemon
 
-**Project status:** Ongoing development.
+### Overview
+
+Implemented a multithreaded monitoring daemon that collects system statistics and receives events from a custom Linux character device.
+
+The daemon runs on the QEMU ARM64 guest and integrates two independent data producers with a shared, bounded queue and a consumer thread.
+
+### Architecture
+
+```text
+/proc/stat, /proc/meminfo
+          |
+          v
+    Proc Producer
+          |
+          +--------------------+
+                               |
+/dev/mydevice                  |
+          |                    |
+     poll() / read()           |
+          |                    |
+          v                    v
+  Device Producer        System Data
+          |                    |
+          +---------+----------+
+                    |
+                    v
+        Shared Ring Queue (16)
+          Mutex + Condition Variables
+                    |
+                    v
+                Consumer
+                    |
+                    v
+             Console Output
+```
+
+### Implementation
+
+- Implemented a system-statistics producer that reads `/proc/stat` and `/proc/meminfo`.
+- Implemented a device-event producer using `poll()` and `read()` on `/dev/mydevice`.
+- Used a 16-entry circular queue to transfer data between producer and consumer threads.
+- Applied `pthread_mutex_t` and `pthread_cond_t` for synchronized queue access and blocking.
+- Used a tagged union to distinguish system statistics from device events.
+- Implemented coordinated thread termination using `active_producers` and `stop_requested`.
+
+### ARM64 Integration Test
+
+The daemon was cross-compiled using the Buildroot AArch64 toolchain and deployed to the QEMU guest running Linux 6.12.27.
+
+**Test procedure**
+
+1. Boot QEMU with the modified `qemu-mydevice.dtb`.
+2. Load the `mydevice.ko` kernel module.
+3. Start the monitoring daemon in the background.
+4. Write a test message to `/dev/mydevice`.
+5. Verify the message reaches the consumer and the daemon terminates normally.
+
+```bash
+insmod /root/mydevice.ko
+
+/usr/bin/monitor_daemon &
+printf 'hello' > /dev/mydevice
+wait
+```
+
+**Observed results**
+
+| Test | Result |
+|---|---|
+| Platform driver binding and device registration | Passed |
+| CPU and memory monitoring | 30 samples collected |
+| Device event transfer | 5 bytes (`hello`) |
+| Device event received by consumer | Passed |
+| Producer-consumer synchronization | Passed |
+| Final queue occupancy | 0 |
+| Remaining active producers | 0 |
+
+Selected console output:
+
+```text
+Read 5 bytes
+usr_data: hello
+
+CPU: 1.00%
+Memory: 13.28%
+
+used: 0, head: 15, cpu_data: 0.000000, active_producers: 0
+```
+
+The `usr_data: hello` message was printed by the consumer thread, confirming successful delivery through the shared queue.
+
+The final queue index is consistent with 31 enqueued records (30 system samples and one device event) in a 16-entry circular queue.
+
+### Validation Scope
+
+The integration test confirms the basic end-to-end data path:
+
+`Userspace write() → Kernel Driver → Kernel Ring Buffer → poll()/read() → Device Producer → Shared Queue → Consumer`
+
+Queue saturation under concurrent load, extended stress testing, and comprehensive error-recovery scenarios remain outside the validated scope.
 
 This repository is an educational implementation for exploring ARM64 Linux system software and kernel-driver integration.
 

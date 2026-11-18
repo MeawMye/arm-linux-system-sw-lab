@@ -3,6 +3,10 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <poll.h>
+
+#include <errno.h>
 
 #define BUF_SIZE 256
 #define QUEUE_SIZE 16
@@ -41,8 +45,115 @@ struct monitor_queue {
 	size_t head;
 	size_t tail;
 	size_t used;
+	int active_producers;
+	int stop_requested;
 };
 
+void producer_finished(struct monitor_queue *queue)
+{
+  pthread_mutex_lock(&queue->mutex);
+
+  queue->active_producers--;
+
+  pthread_cond_broadcast(&queue->not_empty);
+
+  pthread_mutex_unlock(&queue->mutex);
+}
+
+void *mydevice_producer(void *arg) {
+
+  struct monitor_queue *queue = arg;
+
+  int fd = open("/dev/mydevice", O_RDONLY);
+  if(fd < 0) {
+    perror("mydevice driver open failed");
+    goto cleanup;
+  }
+
+  struct pollfd pfd = {
+  .fd =  fd,
+  .events =  POLLIN,
+  .revents = 0
+};
+
+  while(1) {
+
+  pthread_mutex_lock(&queue->mutex);
+  int stop = queue->stop_requested;
+  pthread_mutex_unlock(&queue->mutex);
+
+  if(stop) break;
+
+  int poll_ret = poll(&pfd, 1, 1000);
+
+  if(poll_ret == 0) continue;
+
+  if(poll_ret < 0) {
+      if(errno == EINTR) {
+        continue;
+      }
+
+      perror("poll failed");
+      goto cleanup;
+  }
+
+  if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+    fprintf(stderr, "mydevice poll event error: 0x%x\n",
+            (unsigned int)pfd.revents);
+    goto cleanup;
+  }
+
+  if(poll_ret > 0 && (pfd.revents & POLLIN)) {
+    struct mydevice_data usr_data;
+
+    ssize_t bytes_read = read(
+        fd,
+        usr_data.usr_buf,
+        sizeof(usr_data.usr_buf)
+    );
+
+  if(bytes_read < 0) {
+    if(errno == EAGAIN || errno == EINTR) continue;
+
+    perror("mydevice read failed");
+    goto cleanup;
+    }
+
+  usr_data.length = bytes_read;
+
+  if(bytes_read > 0) {
+    printf("Read %zd bytes\n", usr_data.length);
+
+pthread_mutex_lock(&queue->mutex);
+
+  while (queue->used >= QUEUE_SIZE && !queue->stop_requested) {
+    pthread_cond_wait(&queue->not_full, &queue->mutex);
+  }
+  if(queue->stop_requested) {
+    pthread_mutex_unlock(&queue->mutex);
+    goto cleanup;
+  }
+
+  queue->q[queue->head].type_identifier = 1;
+  queue->q[queue->head].data.mydev = usr_data;
+
+  queue->head = (queue->head + 1) % QUEUE_SIZE;
+  queue->used++;
+
+pthread_cond_signal(&queue->not_empty);
+
+pthread_mutex_unlock(&queue->mutex);
+    }
+  }
+}
+cleanup:
+  if(fd >= 0) {
+      close(fd);
+  }
+
+  producer_finished(queue);
+  return NULL;
+}
 
 int read_cpu_stat(struct cpu_stat *stat)
 {
@@ -86,7 +197,6 @@ int read_cpu_stat(struct cpu_stat *stat)
 
 int read_mem_usage(float *usage)
 {
-
   if(usage == NULL) {
       printf("usage is NULL\n");
       return -1;
@@ -167,8 +277,7 @@ int calculate_cpu_usage(
   return 0;
     }
 
-
-void *producer(void *arg)
+void *proc_producer(void *arg)
 {
   printf("Producer thread started\n");
   struct monitor_queue *queue = arg;
@@ -182,10 +291,10 @@ void *producer(void *arg)
 
   if(prev_result != 0) {
         printf("CPU stat read failed\n");
-        return NULL;
+        goto cleanup;
         }
 
-  for(int i=0; i<3; i++) {
+  for(int i=0; i<30; i++) {
 
       sleep(1);
 
@@ -199,18 +308,18 @@ void *producer(void *arg)
       printf("CPU usage: %.2f%%\n", cpu_percent);
     } else {
       printf("CPU usage calculation failed\n");
-      return NULL;
+      goto cleanup;
     }
   } else {
       printf("CPU stat read failed\n");
-      return NULL;
+      goto cleanup;
   }
 
   int mem_result = read_mem_usage(&mem_percent);
 
   if(mem_result != 0) {
       printf("Memory usage calculation failed\n");
-      return NULL;
+      goto cleanup;
   }
 
   printf("Memory usage: %.2f%%\n", mem_percent);
@@ -238,6 +347,16 @@ pthread_mutex_unlock(&queue->mutex);
 
   prev = curr;
   }
+
+cleanup:
+  pthread_mutex_lock(&queue->mutex);
+
+  queue->stop_requested = 1;
+  pthread_cond_broadcast(&queue->not_full);
+
+  pthread_mutex_unlock(&queue->mutex);
+
+  producer_finished(queue);
   return NULL;
 }
 
@@ -246,15 +365,20 @@ void *consumer(void *arg)
   printf("Consumer thread started\n");
   struct monitor_queue *queue = arg;
 
-for(int i=0; i<3; i++) {
+  while(1) {
 
 pthread_mutex_lock(&queue->mutex);
 
-  while(queue->used == 0)
+  while(queue->used == 0 && queue->active_producers !=0)
   {
     printf("Consumer waiting...\n");
     pthread_cond_wait(&queue->not_empty, &queue->mutex);
     printf("Consumer awakened\n");
+  }
+
+  if(queue->used == 0 && queue->active_producers == 0) {
+      pthread_mutex_unlock(&queue->mutex);
+      return NULL;
   }
 
   struct monitor_data data = queue->q[queue->tail];
@@ -265,45 +389,57 @@ pthread_mutex_lock(&queue->mutex);
 
 pthread_mutex_unlock(&queue->mutex);
 
-  printf("CPU: %.2f%%\n", data.data.proc.cpu_data);
-  printf("Memory: %.2f%%\n", data.data.proc.mem_data);
-
-}  return NULL;
-
+  if(data.type_identifier == 0) {
+    printf("CPU: %.2f%%\n", data.data.proc.cpu_data);
+    printf("Memory: %.2f%%\n", data.data.proc.mem_data);
+  } else {
+    printf("usr_data: %.*s\n",
+          (int)data.data.mydev.length,
+          data.data.mydev.usr_buf);
+  }
 }
 
+return NULL;
+
+}
 
 int main()
 {
   struct monitor_queue queue;
   pthread_t thread_id_P;
+  pthread_t thread_id_P2;
   pthread_t thread_id_C;
 
   queue.head = 0;
   queue.tail = 0;
   queue.used = 0;
+  queue.active_producers = 2;
+  queue.stop_requested = 0;
 
   pthread_mutex_init(&queue.mutex, NULL);
   pthread_cond_init(&queue.not_empty, NULL);
   pthread_cond_init(&queue.not_full, NULL);
 
+  if(pthread_create(&thread_id_P, NULL, proc_producer, &queue) != 0) {
+    perror("thread create failed");
+    return 1;
+  }
 
-  if(pthread_create(&thread_id_P, NULL, producer, &queue) != 0) {
-    perror("thread create failed\n");
+  if(pthread_create(&thread_id_P2, NULL, mydevice_producer, &queue) != 0) {
+    perror("thread create failed");
     return 1;
   }
 
   if(pthread_create(&thread_id_C, NULL, consumer, &queue) != 0) {
-    perror("consumer thread create failed\n");
+    perror("consumer thread create failed");
     return 1;
   }
 
   pthread_join(thread_id_P, NULL);
+  pthread_join(thread_id_P2, NULL);
   pthread_join(thread_id_C, NULL);
 
-  printf("used: %zu, head: %zu, cpu_data: %f\n", queue.used, queue.head, queue.q[0].data.proc.cpu_data);
-
-
+  printf("used: %zu, head: %zu, cpu_data: %f, active_producers: %d\n", queue.used, queue.head, queue.q[0].data.proc.cpu_data, queue.active_producers);
 
   pthread_mutex_destroy(&queue.mutex);
   pthread_cond_destroy(&queue.not_empty);
