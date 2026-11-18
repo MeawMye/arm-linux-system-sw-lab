@@ -126,10 +126,19 @@ void *producer(void *arg)
   float cpu_percent;
 
   int prev_result = read_cpu_stat(&prev);
-  sleep(1);
-  int curr_result = read_cpu_stat(&curr);
 
-  if(prev_result == 0 && curr_result == 0) {
+  if(prev_result != 0) {
+        printf("CPU stat read failed\n");
+        return NULL;
+        }
+
+  for(int i=0; i<3; i++) {
+
+      sleep(1);
+
+      int curr_result = read_cpu_stat(&curr);
+
+    if(curr_result == 0) {
 
     int calc_result = calculate_cpu_usage(&prev, &curr, &cpu_percent);
 
@@ -143,8 +152,6 @@ void *producer(void *arg)
       printf("CPU stat read failed\n");
       return NULL;
   }
-
-
 
 pthread_mutex_lock(&queue->mutex);
 
@@ -166,6 +173,8 @@ pthread_mutex_lock(&queue->mutex);
 
 pthread_mutex_unlock(&queue->mutex);
 
+  prev = curr;
+  }
   return NULL;
 }
 
@@ -173,6 +182,8 @@ void *consumer(void *arg)
 {
   printf("Consumer thread started\n");
   struct monitor_queue *queue = arg;
+
+for(int i=0; i<3; i++) {
 
 pthread_mutex_lock(&queue->mutex);
 
@@ -182,6 +193,8 @@ pthread_mutex_lock(&queue->mutex);
     pthread_cond_wait(&queue->not_empty, &queue->mutex);
     printf("Consumer awakened\n");
   }
+
+
 
   struct monitor_data data = queue->q[queue->tail];
   queue->tail = (queue->tail + 1) % QUEUE_SIZE;
@@ -193,10 +206,9 @@ pthread_mutex_unlock(&queue->mutex);
 
   printf("value: %f\n", data.data.proc.cpu_data);
 
-  return NULL;
+}  return NULL;
 
 }
-
 
 
 int main()
